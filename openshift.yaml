@@ -1,0 +1,897 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  annotations:
+    description: A Wordpress application blueprint. For more information please check
+      https://github.com/klenkes74/openshift-wordpress/blob/master/README.md.
+    iconClass: icon-apache
+    openshift.io/display-name: Wordpress Application Blueprint
+    openshift.io/documentation-url: https://github.com/klenkes74/openshift-wordpress
+    openshift.io/long-description: This image is an S2I builder running on top of
+      the Wordpress S2I Builder
+    openshift.io/provider-display-name: Kaiserpfalz EDV-Service, Roland T. Lichti
+    openshift.io/support-url: https://www.kaiserpfalz-edv.de
+    tags: httpd,php,wordpress,cms
+    template.openshift.io/bindable: "true"
+  creationTimestamp: 2019-01-06T21:38:38Z
+  labels:
+    template: wordpress
+  name: wordpress
+  namespace: openshift
+  resourceVersion: "1231495"
+  selfLink: /apis/template.openshift.io/v1/namespaces/openshift/templates/wordpress
+  uid: 6d6abba5-11fb-11e9-ba12-0cc47a0755e4
+objects:
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    labels:
+      app: ${APPLICATION_NAME}
+      delete: ${APPLICATION_NAME}-app
+    name: ${APPLICATION_NAME}-app
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    labels:
+      app: ${APPLICATION_NAME}
+      delete: ${APPLICATION_NAME}-app
+    name: ${APPLICATION_NAME}-app
+  spec:
+    failedBuildsHistoryLimit: 1
+    output:
+      imageLabels:
+      - name: delete
+        value: ${APPLICATION_NAME}-app
+      - name: io.k8s.display-name
+        value: ${APPLICATION_NAME} S2I Builder
+      - name: io.k8s.description
+        value: Application ${APPLICATION_NAME} S2I Builder (based on WordPress S2I
+          Builder ${WORDPRESS_VERSION})
+      - name: io.openshift.s2i.scripts-url
+        value: image:///usr/libexec/s2i
+      - name: io.s2i.scripts-url
+        value: image:///usr/libexec/s2i
+      - name: io.openshift.tags
+        value: builder,php,wordpress,${APPLICATION_NAME}
+      - name: template
+        value: wordpress
+      - name: io.openshift.expose-services
+        value: 8080:http
+      to:
+        kind: ImageStreamTag
+        name: ${APPLICATION_NAME}-app:${APPLICATION_VERSION}
+    resources:
+      limits:
+        cpu: 250m
+        memory: 128Mi
+    source:
+      completionDeadlineSeconds: 600
+      contextDir: ${REPOSITORY_CONTEXTDIR}
+      git:
+        ref: ${REPOSITORY_TAG}
+        uri: ${REPOSITORY}
+      strategy:
+        sourceStrategy: null
+        type: Source
+      type: Git
+    strategy:
+      sourceStrategy:
+        from:
+          kind: ImageStreamTag
+          name: wordpress-s2i:${WORDPRESS_VERSION}
+      type: Source
+    successfulBuildsHistoryLimit: 1
+    triggers:
+    - type: ConfigChange
+    - type: ImageChange
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    annotations:
+      template.openshift.io/expose-database_name: '{.data[''database'']}'
+      template.openshift.io/expose-database_password: '{.data[''password'']}'
+      template.openshift.io/expose-database_prefix: '{.data[''prefix'']}'
+      template.openshift.io/expose-database_service: '{.data[''service'']}'
+      template.openshift.io/expose-database_user: '{.data[''user'']}'
+    labels:
+      app: ${APPLICATION_NAME}
+      delete: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}-db-config
+  stringData:
+    database: ${DATABASE_NAME}
+    password: ${DATABASE_PASSWORD}
+    prefix: ${DATABASE_TABLE_PREFIX}
+    service: ${APPLICATION_NAME}-db
+    user: ${DATABASE_USER}
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    annotations:
+      template.openshift.io/expose-database_root_password: '{.data[''rootpassword'']}'
+      template.openshift.io/expose-database_service: '{.data[''service'']}'
+    labels:
+      app: ${APPLICATION_NAME}
+      delete: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}-db-admin-config
+  stringData:
+    rootpassword: ${DATABASE_ROOT_PASSWORD}
+    service: ${APPLICATION_NAME}-db
+- apiVersion: apps.openshift.io/v1
+  kind: DeploymentConfig
+  metadata:
+    labels:
+      app: ${APPLICATION_NAME}
+      delete: ${APPLICATION_NAME}-app
+    name: ${APPLICATION_NAME}-app
+  spec:
+    replicas: 1
+    revisionHistoryLimit: 3
+    selector:
+      app: ${APPLICATION_NAME}
+      deploymentConfig: ${APPLICATION_NAME}-app
+    strategy:
+      type: ${WEBSERVER_UPDATE_STRATEGY}
+    template:
+      metadata:
+        labels:
+          app: ${APPLICATION_NAME}
+          deploymentConfig: ${APPLICATION_NAME}-app
+      spec:
+        containers:
+        - env:
+          - name: WORDPRESS_HOME_URL
+            value: https://${APPLICATION_URL}
+          - name: WORDPRESS_SITE_URL
+            value: https://${APPLICATION_URL}
+          - name: WP_DEBUG
+            value: ${DEBUG_MODE}
+          - name: WPLANG
+            value: ${DEFAULT_LANGUAGE}
+          - name: DATABASE_SERVICE_NAME
+            valueFrom:
+              secretKeyRef:
+                key: service
+                name: ${APPLICATION_NAME}-db-config
+          - name: DATABASE_NAME
+            valueFrom:
+              secretKeyRef:
+                key: database
+                name: ${APPLICATION_NAME}-db-config
+          - name: DATABASE_TABLE_PREFIX
+            valueFrom:
+              secretKeyRef:
+                key: prefix
+                name: ${APPLICATION_NAME}-db-config
+          - name: DATABASE_USER
+            valueFrom:
+              secretKeyRef:
+                key: user
+                name: ${APPLICATION_NAME}-db-config
+          - name: DATABASE_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: password
+                name: ${APPLICATION_NAME}-db-config
+          image: ${APPLICATION_NAME}-app:prod
+          livenessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /wp-admin/install.php
+              port: 8080
+              scheme: HTTP
+            httpHeaders:
+            - name: X-Forwarded-Proto
+              value: https
+            - name: X-Probe-Type
+              value: liveness
+            initialDelayTimeout: 10
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 2
+          name: wordpress
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+          - containerPort: 8443
+            protocol: TCP
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              httpHeaders:
+              - name: X-Forwarded-Proto
+                value: https
+              - name: X-Probe-Type
+                value: readiness
+              path: /wp-admin/install.php
+              port: 8080
+              scheme: HTTP
+            initialDelayTimeout: 10
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 2
+          resources:
+            limits:
+              cpu: ${WEBSERVER_CPU_LIMIT}
+              memory: ${WEBSERVER_MEMORY_LIMIT}
+            requests:
+              cpu: ${WEBSERVER_CPU_REQUESTS}
+              memory: ${WEBSERVER_MEMORY_REQUESTS}
+          volumeMounts:
+          - mountPath: /opt/app-root/data
+            name: data
+          - mountPath: /opt/app-root/src/wp-content/cache
+            name: cache
+          - mountPath: /opt/app-root/src/wp-content/backups
+            name: backups
+        volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ${APPLICATION_NAME}-data
+        - emptyDir: {}
+          name: cache
+        - emptyDir: {}
+          name: backups
+    triggers:
+    - type: ConfigChange
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - wordpress
+        from:
+          kind: ImageStreamTag
+          name: ${APPLICATION_NAME}-app:${APPLICATION_VERSION}
+      type: ImageChange
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    labels:
+      delete: ${APPLICATION_NAME}-app
+      name: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}-data
+  spec:
+    accessModes:
+    - ${WEBSERVER_STORAGE_TYPE}
+    resources:
+      requests:
+        storage: ${UPLOAD_SPACE_SIZE}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    labels:
+      app: ${APPLICATION_NAME}
+      delete: ${APPLICATION_NAME}-app
+    name: ${APPLICATION_NAME}-app
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600
+  spec:
+    ports:
+    - name: 8080-tcp
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+    - name: 8443-tcp
+      port: 8443
+      protocol: TCP
+      targetPort: 8443
+    selector:
+      app: ${APPLICATION_NAME}
+      deploymentconfig: ${APPLICATION_NAME}-app
+- apiVersion: v1
+  kind: Route
+  metadata:
+    annotations:
+      console.alpha.openshift.io/overview-app-route: "true"
+    labels:
+      app: ${APPLICATION_NAME}
+      delete: ${APPLICATION_NAME}-app
+    name: ${APPLICATION_NAME}
+  spec:
+    host: ${APPLICATION_URL}
+    port:
+      targetPort: 8080-tcp
+    tls:
+      insecureEdgeTerminationPolicy: Redirect
+      termination: edge
+    to:
+      kind: Service
+      name: ${APPLICATION_NAME}-app
+      weight: 100
+- apiVersion: v1
+  kind: Route
+  metadata:
+    annotations:
+      console.alpha.openshift.io/overview-app-route: "true"
+    labels:
+      app: ${APPLICATION_NAME}
+      delete: ${APPLICATION_NAME}-app
+    name: ${APPLICATION_NAME}-www
+  spec:
+    host: www.${APPLICATION_URL}
+    port:
+      targetPort: 8080-tcp
+    tls:
+      insecureEdgeTerminationPolicy: Redirect
+      termination: edge
+    to:
+      kind: Service
+      name: ${APPLICATION_NAME}-app
+      weight: 100
+- apiVersion: apps.openshift.io/v1
+  kind: DeploymentConfig
+  metadata:
+    labels:
+      app: ${APPLICATION_NAME}
+      delete: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}-db
+  spec:
+    replicas: 1
+    selector:
+      app: ${APPLICATION_NAME}
+      deploymentconfig: ${APPLICATION_NAME}-db
+    strategy:
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          app: ${APPLICATION_NAME}
+          deploymentconfig: ${APPLICATION_NAME}-db
+      spec:
+        containers:
+        - env:
+          - name: MYSQL_DATABASE
+            valueFrom:
+              secretKeyRef:
+                key: database
+                name: ${APPLICATION_NAME}-db-config
+          - name: MYSQL_USER
+            valueFrom:
+              secretKeyRef:
+                key: user
+                name: ${APPLICATION_NAME}-db-config
+          - name: MYSQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: password
+                name: ${APPLICATION_NAME}-db-config
+          - name: MYSQL_ROOT_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: rootpassword
+                name: ${APPLICATION_NAME}-db-admin-config
+          image: mysql
+          name: mysql
+          ports:
+          - containerPort: 3306
+            protocol: TCP
+          resources:
+            limits:
+              cpu: ${DATABASE_CPU_LIMIT}
+              memory: ${DATABASE_MEMORY_LIMIT}
+            livenessProbe:
+              initialDelaySeconds: 30
+              tcpSocket:
+                port: 3306
+              timeoutSeconds: 1
+            readinessProbe:
+              exec:
+                command:
+                - /bin/sh
+                - -i
+                - -c
+                - MYSQL_PWD="${MYSQL_PASSWORD}" mysql -h 127.0.0.1 -u ${MYSQL_USER}
+                  -D ${MYSQL_DATABASE} -e 'SELECT 1'
+              failureThreshold: 3
+              initialDelaySeconds: 10
+              successThreshold: 1
+              timeoutSeconds: 1
+            requests:
+              cpu: ${DATABASE_CPU_REQUESTS}
+              memory: ${DATABASE_MEMORY_REQUESTS}
+          volumeMounts:
+          - mountPath: /var/lib/mysql/data
+            name: data
+        volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ${APPLICATION_NAME}-mysql-data
+    triggers:
+    - type: ConfigChange
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - mysql
+        from:
+          kind: ImageStreamTag
+          name: mysql:${MYSQL_VERSION}
+          namespace: openshift
+      type: ImageChange
+- apiVersion: v1
+  kind: Service
+  metadata:
+    labels:
+      app: ${APPLICATION_NAME}
+      delete: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}-db
+  spec:
+    ports:
+    - name: 3306-tcp
+      port: 3306
+      protocol: TCP
+      targetPort: 3306
+    selector:
+      app: ${APPLICATION_NAME}
+      deploymentconfig: ${APPLICATION_NAME}-db
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    labels:
+      delete: ${APPLICATION_NAME}
+      name: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}-mysql-data
+  spec:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: ${DATABASE_SIZE}
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    annotations:
+      template.openshift.io/expose-database_name: '{.data[''database'']}'
+      template.openshift.io/expose-database_password: '{.data[''password'']}'
+      template.openshift.io/expose-database_prefix: '{.data[''prefix'']}'
+      template.openshift.io/expose-database_service: '{.data[''service'']}'
+      template.openshift.io/expose-database_user: '{.data[''user'']}'
+    labels:
+      app: ${APPLICATION_NAME}
+      delete: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}-stage-db-config
+  stringData:
+    database: ${DATABASE_NAME}
+    password: ${DATABASE_PASSWORD}
+    prefix: ${DATABASE_TABLE_PREFIX}
+    service: ${APPLICATION_NAME}-stage-db
+    user: ${DATABASE_USER}
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    annotations:
+      template.openshift.io/expose-database_root_password: '{.data[''rootpassword'']}'
+      template.openshift.io/expose-database_service: '{.data[''service'']}'
+    labels:
+      app: ${APPLICATION_NAME}
+      delete: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}-stage-db-admin-config
+  stringData:
+    rootpassword: ${DATABASE_ROOT_PASSWORD}
+    service: ${APPLICATION_NAME}-stage-db
+- apiVersion: apps.openshift.io/v1
+  kind: DeploymentConfig
+  metadata:
+    labels:
+      app: ${APPLICATION_NAME}
+      delete: ${APPLICATION_NAME}-app
+    name: ${APPLICATION_NAME}-stage-app
+  spec:
+    replicas: 1
+    revisionHistoryLimit: 3
+    selector:
+      app: ${APPLICATION_NAME}
+      deploymentConfig: ${APPLICATION_NAME}-stage-app
+    strategy:
+      type: ${WEBSERVER_UPDATE_STRATEGY}
+    template:
+      metadata:
+        labels:
+          app: ${APPLICATION_NAME}
+          deploymentConfig: ${APPLICATION_NAME}-stage-app
+      spec:
+        containers:
+        - env:
+          - name: WORDPRESS_HOME_URL
+            value: https://stage.${APPLICATION_URL}
+          - name: WORDPRESS_SITE_URL
+            value: https://stage.${APPLICATION_URL}
+          - name: WP_DEBUG
+            value: ${DEBUG_MODE}
+          - name: WPLANG
+            value: ${DEFAULT_LANGUAGE}
+          - name: DATABASE_SERVICE_NAME
+            valueFrom:
+              secretKeyRef:
+                key: service
+                name: ${APPLICATION_NAME}-stage-db-config
+          - name: DATABASE_NAME
+            valueFrom:
+              secretKeyRef:
+                key: database
+                name: ${APPLICATION_NAME}-stage-db-config
+          - name: DATABASE_TABLE_PREFIX
+            valueFrom:
+              secretKeyRef:
+                key: prefix
+                name: ${APPLICATION_NAME}-stage-db-config
+          - name: DATABASE_USER
+            valueFrom:
+              secretKeyRef:
+                key: user
+                name: ${APPLICATION_NAME}-stage-db-config
+          - name: DATABASE_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: password
+                name: ${APPLICATION_NAME}-stage-db-config
+          image: ${APPLICATION_NAME}-app:${APPLICATION_VERSION}
+          livenessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /wp-admin/install.php
+              port: 8080
+              scheme: HTTP
+            httpHeaders:
+            - name: X-Forwarded-Proto
+              value: https
+            - name: X-Probe-Type
+              value: liveness
+            initialDelayTimeout: 10
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 2
+          name: wordpress
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+          - containerPort: 8443
+            protocol: TCP
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              httpHeaders:
+              - name: X-Forwarded-Proto
+                value: https
+              - name: X-Probe-Type
+                value: readiness
+              path: /wp-admin/install.php
+              port: 8080
+              scheme: HTTP
+            initialDelayTimeout: 10
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 2
+          resources:
+            limits:
+              cpu: ${WEBSERVER_CPU_LIMIT}
+              memory: ${WEBSERVER_MEMORY_LIMIT}
+            requests:
+              cpu: ${WEBSERVER_CPU_REQUESTS}
+              memory: ${WEBSERVER_MEMORY_REQUESTS}
+          volumeMounts:
+          - mountPath: /opt/app-root/data
+            name: data
+          - mountPath: /opt/app-root/src/wp-content/cache
+            name: cache
+          - mountPath: /opt/app-root/src/wp-content/backups
+            name: backups
+        volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ${APPLICATION_NAME}-stage-data
+        - emptyDir: {}
+          name: cache
+        - emptyDir: {}
+          name: backups
+    triggers:
+    - type: ConfigChange
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - wordpress
+        from:
+          kind: ImageStreamTag
+          name: ${APPLICATION_NAME}-app:${APPLICATION_VERSION}
+      type: ImageChange
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    labels:
+      delete: ${APPLICATION_NAME}-app
+      name: ${APPLICATION_NAME}-stage
+    name: ${APPLICATION_NAME}-stage-data
+  spec:
+    accessModes:
+    - ${WEBSERVER_STORAGE_TYPE}
+    resources:
+      requests:
+        storage: ${UPLOAD_SPACE_SIZE}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    labels:
+      app: ${APPLICATION_NAME}
+      delete: ${APPLICATION_NAME}-app
+    name: ${APPLICATION_NAME}-stage-app
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600
+  spec:
+    ports:
+    - name: 8080-tcp
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+    - name: 8443-tcp
+      port: 8443
+      protocol: TCP
+      targetPort: 8443
+    selector:
+      app: ${APPLICATION_NAME}
+      deploymentconfig: ${APPLICATION_NAME}-stage-app
+- apiVersion: v1
+  kind: Route
+  metadata:
+    annotations:
+      console.alpha.openshift.io/overview-app-route: "true"
+    labels:
+      app: ${APPLICATION_NAME}
+      delete: ${APPLICATION_NAME}-app
+    name: ${APPLICATION_NAME}-stage
+  spec:
+    host: stage.${APPLICATION_URL}
+    port:
+      targetPort: 8080-tcp
+    tls:
+      insecureEdgeTerminationPolicy: Redirect
+      termination: edge
+    to:
+      kind: Service
+      name: ${APPLICATION_NAME}-app
+      weight: 100
+- apiVersion: apps.openshift.io/v1
+  kind: DeploymentConfig
+  metadata:
+    labels:
+      app: ${APPLICATION_NAME}
+      delete: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}-stage-db
+  spec:
+    replicas: 1
+    selector:
+      app: ${APPLICATION_NAME}
+      deploymentconfig: ${APPLICATION_NAME}-stage-db
+    strategy:
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          app: ${APPLICATION_NAME}
+          deploymentconfig: ${APPLICATION_NAME}-stage-db
+      spec:
+        containers:
+        - env:
+          - name: MYSQL_DATABASE
+            valueFrom:
+              secretKeyRef:
+                key: database
+                name: ${APPLICATION_NAME}-stage-db-config
+          - name: MYSQL_USER
+            valueFrom:
+              secretKeyRef:
+                key: user
+                name: ${APPLICATION_NAME}-stage-db-config
+          - name: MYSQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: password
+                name: ${APPLICATION_NAME}-stage-db-config
+          - name: MYSQL_ROOT_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: rootpassword
+                name: ${APPLICATION_NAME}-stage-db-admin-config
+          image: mysql
+          name: mysql
+          ports:
+          - containerPort: 3306
+            protocol: TCP
+          resources:
+            limits:
+              cpu: ${DATABASE_CPU_LIMIT}
+              memory: ${DATABASE_MEMORY_LIMIT}
+            livenessProbe:
+              initialDelaySeconds: 30
+              tcpSocket:
+                port: 3306
+              timeoutSeconds: 1
+            readinessProbe:
+              exec:
+                command:
+                - /bin/sh
+                - -i
+                - -c
+                - MYSQL_PWD="${MYSQL_PASSWORD}" mysql -h 127.0.0.1 -u ${MYSQL_USER}
+                  -D ${MYSQL_DATABASE} -e 'SELECT 1'
+              failureThreshold: 3
+              initialDelaySeconds: 10
+              successThreshold: 1
+              timeoutSeconds: 1
+            requests:
+              cpu: ${DATABASE_CPU_REQUESTS}
+              memory: ${DATABASE_MEMORY_REQUESTS}
+          volumeMounts:
+          - mountPath: /var/lib/mysql/data
+            name: data
+        volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ${APPLICATION_NAME}-stage-mysql-data
+    triggers:
+    - type: ConfigChange
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - mysql
+        from:
+          kind: ImageStreamTag
+          name: mysql:${MYSQL_VERSION}
+          namespace: openshift
+      type: ImageChange
+- apiVersion: v1
+  kind: Service
+  metadata:
+    labels:
+      app: ${APPLICATION_NAME}
+      delete: ${APPLICATION_NAME}-stage-db
+    name: ${APPLICATION_NAME}-stage-db
+  spec:
+    ports:
+    - name: 3306-tcp
+      port: 3306
+      protocol: TCP
+      targetPort: 3306
+    selector:
+      app: ${APPLICATION_NAME}
+      deploymentconfig: ${APPLICATION_NAME}-stage-db
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    labels:
+      delete: ${APPLICATION_NAME}
+      name: ${APPLICATION_NAME}-stage
+    name: ${APPLICATION_NAME}-stage-mysql-data
+  spec:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: ${DATABASE_SIZE}
+parameters:
+- description: Name of this wordpress site
+  displayName: Site
+  name: APPLICATION_NAME
+  required: true
+- description: Version der Site
+  displayName: Version
+  name: APPLICATION_VERSION
+  required: true
+  value: latest
+- description: Hostname part of the URI of the site without leading "www." (will be added automatically)
+  displayName: Site URI hostname
+  name: APPLICATION_URL
+  required: true
+- description: Git repository containing all site specific data
+  displayName: Git Repository
+  name: REPOSITORY
+  required: true
+- description: Directory within repository.
+  displayName: Context Directory
+  name: REPOSITORY_CONTEXTDIR
+  required: true
+  value: /
+- description: Tag inside the git repo to use.
+  displayName: Git Tag
+  name: REPOSITORY_TAG
+  required: true
+  value: master
+- description: Size of the data store for user uploads (<HOME>/wp-content/uploads).
+  displayName: Upload Space Size
+  name: UPLOAD_SPACE_SIZE
+  required: true
+  value: 5Gi
+- name: DEFAULT_LANGUAGE
+  value: de_DE
+- description: Activate the debugging of WordPress
+  name: DEBUG_MODE
+  required: true
+  value: "false"
+- description: Maximum memory usage of this pod.
+  displayName: Maximum used memory (Webserver)
+  name: WEBSERVER_MEMORY_LIMIT
+  required: true
+  value: 1280Mi
+- description: The minimum required memory for this site.
+  displayName: Minimum required memory (Webserver)
+  name: WEBSERVER_MEMORY_REQUESTS
+  required: true
+  value: 640Mi
+- description: Maximum CPU usage of this pod.
+  displayName: Maximum used CPU (Webserver)
+  name: WEBSERVER_CPU_LIMIT
+  required: true
+  value: "2"
+- description: The minumum required CPU for this site.
+  displayName: Mimimum required CPU (Webserver)
+  name: WEBSERVER_CPU_REQUESTS
+  required: true
+  value: 30m
+- description: |
+    If you have RWX-capable storage for the webserver upload then you can use "rolling", otherwise you need to use
+    "recreate"
+  displayName: Update strategy (Webserver)
+  name: WEBSERVER_UPDATE_STRATEGY
+  required: true
+  value: recreate
+- displayName: Storage capability (RWO, RWX)
+  name: WEBSERVER_STORAGE_TYPE
+  required: true
+  value: ReadWriteOnce
+- displayName: Maximum size of database
+  name: DATABASE_SIZE
+  required: true
+  value: 2Gi
+- description: Maximum memory usage of this pod.
+  displayName: Maximum used memory (Database)
+  name: DATABASE_MEMORY_LIMIT
+  required: true
+  value: 1536Mi
+- description: The minimum required memory for this site.
+  displayName: Minimum required memory (Database)
+  name: DATABASE_MEMORY_REQUESTS
+  required: true
+  value: 1280Mi
+- description: Maximum CPU usage of this pod.
+  displayName: Maximum used CPU (Database)
+  name: DATABASE_CPU_LIMIT
+  required: true
+  value: 500m
+- description: The minumum required CPU for this site.
+  displayName: Mimimum required CPU (Database)
+  name: DATABASE_CPU_REQUESTS
+  required: true
+  value: 15m
+- displayName: Database name
+  from: db[a-f0-9]{16}
+  generate: expression
+  name: DATABASE_NAME
+  required: true
+- description: Prefix for all database tables generated
+  displayName: Prefix
+  from: wp_[a-f0-9]{3}_
+  generate: expression
+  name: DATABASE_TABLE_PREFIX
+- displayName: Database user
+  from: user[a-f0-9]{4}
+  generate: expression
+  name: DATABASE_USER
+  required: true
+- displayName: Database password
+  from: '[a-zA-Z0-9]{32}'
+  generate: expression
+  name: DATABASE_PASSWORD
+  required: true
+- displayName: Database root password
+  from: '[a-zA-Z0-9]{32}'
+  generate: expression
+  name: DATABASE_ROOT_PASSWORD
+  required: true
+- description: Tag of Wordpress to be installed
+  name: WORDPRESS_VERSION
+  required: true
+  value: latest
+- description: Tag of the MySQL database version
+  name: MYSQL_VERSION
+  required: true
+  value: "5.7"
